@@ -1,114 +1,181 @@
+/*
+Idea utilizar un sensor de presion para detectar la variación de la presion que
+cuandos sea nativa se detecta la caida  
+*/
+
 #include <Wire.h>
 #include <MPU6050.h>
 
-int cal;
+#define MPU6050_ADDR 0x68  // Dirección I2C del MPU6050
+#define MAX_RETRIES 5       // Número máximo de intentos
 MPU6050 mpu;
+
+
+float gravityX = 0, gravityY = 0, gravityZ = 9.81; //
+unsigned long previousTime = 0;
+float azl, axl, ayl = 0;
+float gyroXrate, angleX = 0;
+float gyroYrate, angleY = 0;
+float gyroXOffset = 0;
+float gyroYOffset = 0;
+float ax, ay, az = 0;
+float alpha = 0.996; // Factor de suavizado
+int cal;
+
+
+void calibrateGyro() {
+  int numReadings = 1000;
+  long gyroXSum = 0;
+  long gyroYSum = 0;
+
+  Serial.println("Calibrando giroscopio...");
+  
+  for (int i = 0; i < numReadings; i++) {
+    int16_t gyroXRaw, gyroYRaw, gyroZRaw;
+    mpu.getRotation(&gyroXRaw, &gyroYRaw, &gyroZRaw);
+
+    // Sumar lecturas del giroscopio en X
+    gyroXSum += gyroXRaw;
+    gyroYSum += gyroYRaw;
+
+    delay(3);  // Pequeño retardo entre lecturas
+  }
+
+  // Calcular el promedio de las lecturas
+  gyroXOffset = gyroXSum / numReadings;
+  gyroYOffset = gyroYSum / numReadings;
+
+  Serial.print("Offset del giroscopio en X: ");
+  Serial.println(gyroXOffset);
+}
+
 
 void setup() {
 
-
-  pinMode(13, OUTPUT);  // Pin 13 como salida
-  Serial.begin(9600);
+  pinMode(2, OUTPUT);  // Pin 13 como salida
+  pinMode(3, OUTPUT);
+  Serial.begin(115200);
+  Serial.println("Starting...");
   
   Wire.begin();
+  bool connected = false;
+
+    for (int i = 0; i < MAX_RETRIES; i++) {
+        Wire.beginTransmission(MPU6050_ADDR);
+        if (Wire.endTransmission() == 0) {
+            connected = true;
+            break; // Salir si está conectado
+        }
+        delay(100); // Espera un poco antes de reintentar
+    }
+
+    if (connected) {
+        Serial.println("MPU6050 conectado correctamente");
+    } else {
+        Serial.println("No se pudo conectar al MPU6050");
+        while(1);
+    }
+
   mpu.initialize();
 
   Serial.println("Don t move calibration is on");
-  delay(300);
+  calibrateGyro(); 
   cal = mpu.getAccelerationZ();
   Serial.println(cal);
+  delay(300);
 
 }
 
 void loop() {
 
-  int16_t gyroX = mpu.getRotationX();
-  int16_t gyroY = mpu.getRotationY();
-  int16_t gyroZ = mpu.getRotationZ();
+  unsigned long currentTime = millis();
+  float deltaTime = (currentTime - previousTime) / 1000.0; // Tiempo entre lecturas en segundos
+
+  int16_t gyroXRaw, gyroYRaw, gyroZRaw;
+  int16_t axr, ayr, azr ;
   
-  float dt = 0.1;  // Intervalo de tiempo en segundos (10ms)
+
+  mpu.getRotation(&gyroXRaw, &gyroYRaw, &gyroZRaw);
+  mpu.getAcceleration(&axr, &ayr, &azr);
+
+  // Compensar el offset del giroscopio
+  gyroXRaw -= gyroXOffset;
+  gyroYRaw -= gyroYOffset;
+
+  // Convertir la lectura cruda del giroscopio a grados/segundo
+  gyroXrate = gyroXRaw / 131; // 131.0 para un rango de 250 grados/segundo (predeterminado)
+  gyroYrate = gyroYRaw / 131;
+
+ 
   static float angleX = 0, angleY = 0, angleZ = 0;  // Acumulación de ángulos
 
   // Integrar los valores de giroscopio para obtener los ángulos
-  angleX += gyroX * dt / 131;  // 131: sensibilidad para giroscopio configurado a 250°/s
-  angleY += gyroY * dt / 131;
-  angleZ += gyroZ * dt / 131;
-  
+  angleX += gyroXrate * deltaTime;
+  angleY += gyroYrate * deltaTime;
+
   // Leer aceleraciones y convertir a metros por segundo cuadrado
-  float accelX = mpu.getAccelerationX() * 9.81 / cal;
-  float accelY = mpu.getAccelerationY() * 9.81 / cal;
-  float accelZ = mpu.getAccelerationZ() * 9.81 / cal;
+  
+  
+  float ax = axr* 9.81 / cal;
+  float ay = ayr * 9.81 / cal;
+  float az = azr * 9.81 / cal;
+
+  gravityX = alpha * gravityX + (1 - alpha) * ax;
+  gravityY = alpha * gravityY + (1 - alpha) * ay;
+  gravityZ = alpha * gravityZ + (1 - alpha) * az;
+
+  float vz= vz + (gravityZ-az)*deltaTime;
+  float altitude = altitude + vz*deltaTime;
+
 
   // Magnitud total de la aceleración
-  float accel = sqrt(pow(accelX, 2) + pow(accelY, 2) + pow(accelZ, 2));
-  
-  // Calcular Pitch y Roll
-  float pitch = atan2(accelY, sqrt(accelX * accelX + accelZ * accelZ)) * (180.0 / PI);
-  float roll = atan2(accelX, sqrt(accelY * accelY + accelZ * accelZ)) * (180.0 / PI);
 
-   /*
-  Serial.print("Posición: ");
-  Serial.print("Pitch = ");
-  Serial.print(pitch);
-  Serial.print("°   Roll = ");
-  Serial.print(roll);
-  Serial.println("°");
-  
-  Serial.print("Ángulo: ");
-  Serial.print("X = ");
-  Serial.print(angleX);
-  Serial.print("°   Y = ");
-  Serial.print(angleY);
-  Serial.print("°   Z = ");
-  Serial.print(angleZ);
-  Serial.println("°");
-  */
+  // Calcular el angulos angulos con la aceleracion
+  float gyroAccelX = atan2(ay, sqrt(ax * ax + az * az)) * (180.0 / PI);
+  float gyroAccelY = atan2(ax, sqrt(ay * ay + az * az)) * (180.0 / PI);
 
+  //angulos calculados con filtro complementario
+  float pitch=  alpha*(pitch + angleX) + (1-alpha)*gyroAccelX;
+  float roll=  alpha*(roll + angleY) + (1-alpha)*gyroAccelY;
 
-  // Codigo  para mostrar las aceleraciones en todos los ejes
-
-  /*
-  Serial.print("Ax: ");
-  Serial.print(accelX);
-  Serial.print("  Ay:  ");
-  Serial.print(accelY);
-  Serial.print("  Az:  ");
-  Serial.print(accelZ);
-  Serial.print("  At: ");
-  Serial.println(accel);
-  */
+  //sistema linealizado
+  azl = gravityZ -az;
+  ayl = ay - gravityY;
+  axl = ax - gravityX;
 
   // Condiciones para abrir paracaídas
 
-  if (9.81 - accelZ < -0.5) {
-    Serial.print(accelZ);
+  if (azl < -0.9) {
+    Serial.print(az - gravityZ);
     Serial.println(" (caida) Abrir paracaidas");
-    digitalWrite(13, HIGH);  // Acción a tomar
+    digitalWrite(2, HIGH);  // Acción a tomar
   }
-  else if (abs(pitch) > 25) {
-    Serial.print(pitch);
-    Serial.println("  desvio (pitch) Abrir paracaidas");
-    digitalWrite(13, HIGH);
+  else if (abs(pitch) > 20) {
+    Serial.print(pitch);Serial.println("  desvio (pitch) Abrir paracaidas");
+    digitalWrite(3, HIGH);
   }
-  else if (abs(roll) > 25) {
-    Serial.print(roll);
-    Serial.println("  desvio (roll) Abrir paracaidas");
-    digitalWrite(13, HIGH);
+  else if (abs(roll) > 20) {
+    Serial.print(roll);Serial.println("  desvio (roll) Abrir paracaidas");
+    digitalWrite(3, HIGH);
   }
   else {
-    digitalWrite(13, LOW);
-    Serial.print("ok  pitch: ");
-    Serial.print(pitch);
-    Serial.print("  roll:  ");
-    Serial.print(roll);
-    Serial.print("  Az:  ");
-    Serial.println(9.81-accelZ);
+    digitalWrite(2, LOW);digitalWrite(3, LOW);
+    Serial.print("ok  pitch: ");  Serial.print(pitch); Serial.print("  roll:  "); Serial.print(roll);Serial.print("  Az:  ");   Serial.println(gravityZ-az);
   }
 
 
-  delay(dt * 1000);  // Esperar el tiempo definido por dt antes de la siguiente lectura
+  //datos para la interfaz
+
+ /*
+ String a =  String(gyroY * PI /180) + "|" + String(roll) + "|" + String(pitch) + "|" + 
+             String(altitude) + "|" + String(gravityZ) + "|" + 
+             String(gravityZ - az) + "|" + String(vz) + "|0";
+  Serial.println(a);
+  */
+
+  // Actualizar el tiempo anterior
+  previousTime = currentTime;
+  delay(10);  // Esperar el tiempo definido por dt antes de la siguiente lectura
+
 }
-
-
-
 
