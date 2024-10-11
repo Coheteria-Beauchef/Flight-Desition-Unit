@@ -7,9 +7,9 @@ from scipy.spatial.transform import Rotation as R
 
 
 
-fs = 133 ## frecuencia de muestreo
+fs = 133 # frecuencia de muestreo
 cutoff = 0.3 # Frecuencia de corte del filtro
-order = 1  # Orden del filtr
+order = 1  # Orden del filtr0
 
 def butter_highpass(cutoff, fs, order=1):
     nyq = 0.5 * fs  # Frecuencia de Nyquist
@@ -32,11 +32,18 @@ ang = np.column_stack((df['roll'],df['pitch'], df['yaw']))
 
 ang_rad = np.radians(ang)
 
+tcAcc = np.zeros_like(acc)
+linvel = np.zeros_like(tcAcc)
+filvel = np.zeros_like(linvel)
+linpos = np.zeros_like(filvel)
+filpos = np.zeros_like(linpos)
+
+
 rotation_matrices = []
 for angle in ang_rad:
     # Crear una rotación usando los ángulos en radianes
     r = R.from_euler('xyz', angle)
-    rotation_matrix = r.as_matrix()  # Obtener la matriz de rotación
+    rotation_matrix = r.as_matrix()
     rotation_matrices.append(rotation_matrix)
     
 rotation_matrices = np.array(rotation_matrices)
@@ -44,29 +51,16 @@ print(np.shape(rotation_matrices))
 
 for i in range(rotation_matrices.shape[0]):
     rotation_matrices[i] = rotation_matrices[i] / np.linalg.norm(rotation_matrices[i], axis=1, keepdims=True)  # Normaliza filas
-
-tcAcc = np.zeros_like(acc)
-
 for i in range(len(acc)):
     tcAcc[i, :] = rotation_matrices[i] @ acc[i, :]
-
-linvel = np.zeros_like(tcAcc)
-
 for i in range(1,N):
     linvel[i] = linvel[i-1] + tcAcc [i] * 1/fs
-
-filvel = np.zeros_like(linvel)
-for i in range(3):  # Asumiendo que tienes 3 columnas de velocidad
+for i in range(3):  
     filvel[:, i] = filtfilt(b, a, linvel[:, i])
-
-linpos = np.zeros_like(filvel)
 for i in range(1,N):
     linpos[i] = linpos[i-1] + filvel[i] * 1/fs
-
 b, a = butter_highpass(2*cutoff, fs, order)
-
-filpos = np.zeros_like(linpos)
-for i in range(3):  # Asumiendo que tienes 3 columnas de velocidad
+for i in range(3): 
     filpos[:, i] = filtfilt(b, a, linpos[:, i])
 
 
