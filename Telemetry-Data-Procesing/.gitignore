@@ -1,0 +1,4 @@
+# Ignorar carpetas de construcción y caché
+build/
+dist/
+__pycache__/
